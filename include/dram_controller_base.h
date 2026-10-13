@@ -18,13 +18,14 @@ class DramControllerBase : public sc_core::sc_module
     unsigned read_count() const { return read_count_; }
     unsigned write_count() const { return write_count_; }
     unsigned conflicts() const { return conflicts_; }
+    std::uint8_t peek(unsigned addr) const { return storage_.peek(addr); }
 
   protected:
     struct Request
     {
-        tlm::tlm_generic_payload *trans;
+        tlm::tlm_generic_payload* trans;
         int port;
-        sc_core::sc_event *done;
+        sc_core::sc_event* done;
     };
 
     enum class Dir
@@ -37,9 +38,9 @@ class DramControllerBase : public sc_core::sc_module
 
     bool has_request() const { return !read_queue_.empty() || !write_queue_.empty(); }
 
-    Dir next_request(Request &req);
+    Dir next_request(Request& req);
 
-    void finish_request(const Request &req, Dir dir);
+    void finish_request(const Request& req, Dir dir);
 
     bool turnaround(Dir dir) const { return have_last_ && ((dir == Dir::Write) != last_write_); }
 
@@ -52,7 +53,7 @@ class DramControllerBase : public sc_core::sc_module
     sc_core::sc_event new_request_;
 
   private:
-    void b_transport(int port, tlm::tlm_generic_payload &trans, sc_core::sc_time &delay);
+    void b_transport(int port, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay);
     virtual void serve() = 0;
 
     DramStorage storage_;

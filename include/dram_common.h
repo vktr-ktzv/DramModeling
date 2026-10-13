@@ -21,11 +21,13 @@ class DramStorage
 
     unsigned size() const { return static_cast<unsigned>(mem_.size()); }
 
-    tlm::tlm_response_status access(tlm::tlm_generic_payload &trans)
+    std::uint8_t peek(unsigned addr) const { return addr < mem_.size() ? mem_[addr] : 0; }
+
+    tlm::tlm_response_status access(tlm::tlm_generic_payload& trans)
     {
         const std::uint64_t addr = trans.get_address();
         const unsigned len = trans.get_data_length();
-        unsigned char *data = trans.get_data_ptr();
+        unsigned char* data = trans.get_data_ptr();
 
         if (data == nullptr)
         {

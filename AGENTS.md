@@ -2,11 +2,13 @@
 
 ## What this repo is
 SystemC 3.0.2 / TLM-2.0 example of a DRAM controller in C++26. One executable,
-`dram_controller` (`src/controller_main.cpp`), instantiates two controller models
-that share `dram::DramControllerBase`: `DramControllerAsync` (untimed, arbitrary
-`sc_time` latencies) and `DramControllerSync` (clocked via `sc_in<bool> clk`,
-whole-cycle latencies). The base owns `kPorts = 4` tagged target sockets, read and
-write queues, round-robin arbitration with a turnaround penalty, and back-pressure.
+`spike_dram` (`src/spike_dram_main.cpp`), embeds the RISC-V Spike ISS and drives two
+controller models that share `dram::DramControllerBase`: `DramControllerAsync`
+(untimed, arbitrary `sc_time` latencies) and `DramControllerSync` (clocked via
+`sc_in<bool> clk`, whole-cycle latencies). The base owns `kPorts = 4` tagged target
+sockets, read and write queues, round-robin arbitration with a turnaround penalty,
+and back-pressure. A write-back `StoreBuffer` sits in front of the controller so
+several transactions can be in flight at once.
 
 `slides.md` is the source lecture (Russian) the models follow; reference material,
 not built. Some code comments are Russian to match it.
@@ -20,7 +22,8 @@ C++26 rebuild `/home/viktor/mipt/masters_diploma/systemc-cxx26` and auto-selects
 ```sh
 cmake -S . -B build
 cmake --build build
-./build/dram_controller
+tests/spike/build.sh fib
+./build/spike_dram tests/spike/fib.elf
 ```
 
 - Override the library with `-DSYSTEMC_ROOT=<prefix>` or `-DCMAKE_PREFIX_PATH=...`.
@@ -28,12 +31,50 @@ cmake --build build
   ships no ASan runtime, so also pass `-DCMAKE_CXX_COMPILER=/usr/bin/g++`.
 - `BUILD_RPATH` points at the SystemC lib dir, so run the binary directly; do
   **not** export `LD_LIBRARY_PATH`.
-- No test framework. Verification = run the binary and confirm `OK` for all eight
-  initiators, each controller reporting `reads=64 writes=64 conflicts=124`.
-- Only the `dram_controller` target exists, even though the CMake `project()` is
-  named `dram_models` and `dram_common.h` comments still mention async/sync DRAM.
+- No test framework. Verification = run an ELF and confirm `exit code = 0` and the
+  expected `reads`/`writes`/`conflicts`; `fib.elf` is the baseline.
+- One target: `spike_dram` (Spike co-simulation, see below); the CMake `project()`
+  is still named `dram_models` and `dram_common.h` comments mention async/sync DRAM.
 - The parent dir `/home/viktor/mipt/masters_diploma/` holds the SystemC source
   tree and tarball. Do not edit or treat those as this project.
+
+## Spike co-simulation (`spike_dram`)
+Embeds a built `riscv-isa-sim` (`SPIKE_ROOT`, default
+`/home/viktor/mipt/masters_diploma/riscv-isa-sim`) into an `sc_main`; RISC-V
+loads/stores to `0x4000_0000`+ go through the TLM controller. The Spike lib is
+static/dynamic C++17/g++ while our TU is C++26/clang — both on libstdc++, which
+links fine. Build and run:
+
+```sh
+tests/spike/build.sh                      # dram_test.elf (asm); `build.sh fib` -> C++
+./build/spike_dram --async tests/spike/fib.elf   # default is async
+./build/spike_dram --sync  tests/spike/fib.elf
+tests/spike/run_both.sh fib                       # same ELF on both controllers
+```
+
+- `sc_main` picks the controller by flag: `--sync` builds `DramControllerSync`
+  (`clk` driven by an `sc_clock`, period 10 ns) and `--async` builds
+  `DramControllerAsync`; both live in a `unique_ptr<DramControllerBase>`, so the
+  bridges/stats code is shared. C++ tests are compiled freestanding
+  (`clang++ --target=riscv64 -nostdlib -ffreestanding -std=c++20`, no STL/libc)
+  with `tests/spike/crt0.S` providing `_start`/`tohost`.
+- `sim_t::add_device(base, dev)` routes MMIO; `bus_t` calls `dev->load/store`
+  with an **already offset** address (`paddr - base`), so `SpikeTlmDevice` must
+  not subtract the base again.
+- The blocking `b_transport` (`wait(done)`) only works because `sim_t::run()` is
+  called from an `SC_THREAD` (`SpikeRunner`) inside `sc_start()`; never call it
+  from Spike's own loop.
+- Time is decoupled from memory: `CosimSim` subclasses `sim_t` and overrides the
+  virtual `idle()` to run one `processor_t::step(1)` then `wait(cycle)`, so the
+  SystemC host owns the scheduler (no caches; reads block, writes are buffered).
+  `cycle` equals the clock period (10 ns). Program exit is the HTIF
+  `tohost`/`fromhost` protocol (write `(code<<1)|1` to `tohost`); the ELF must
+  define those symbols.
+- Do **not** add `${SPIKE_ROOT}/fesvr` to include paths: its `syscall.h` shadows
+  glibc's and breaks `<memory>`; use `${SPIKE_ROOT}` for `<fesvr/htif.h>`.
+- `triggers`/CLINT/PLIC are absent because `sim_t` is built with
+  `dtb_enabled=false` and `start_pc` set explicitly.
+- `SPIKE_PLAN.md` has the full plan and next milestones.
 
 ## Architecture notes
 - `include/dram_common.h` (`dram::DramStorage`) owns the byte array and payload
@@ -52,9 +93,11 @@ cmake --build build
 - `serve()` is pure virtual; each subclass starts it with `SC_THREAD(serve)` in its
   constructor. Async waits arbitrary `sc_time`; sync waits `clk.posedge_event()`
   and `cycles(n) = clock_period_ * n`.
-- `src/controller_main.cpp`: 4 async initiators start at t=0; `Director` waits for
-  them, then releases the 4 sync initiators via `BenchState::start`, prints stats
-  and calls `sc_stop()`.
+- `src/spike_dram_main.cpp`: `SpikeRunner` (an `SC_THREAD`) runs the whole `sim_t`
+  inside `sc_start()`; on exit it calls `store_buffer.flush()` and `sc_stop()`.
+- `include/store_buffer.h` / `src/store_buffer.cpp`: `store()` is non-blocking
+  (queue + `kWriteLanes = 3` drain threads); `load()` forwards not-yet-applied
+  writes (store-to-load) and serializes overlapping writes to keep program order.
 
 ## SystemC 3.0 / IEEE 1666-2023 quirks
 - SystemC and user code must be built with the **same** `-std`: headers reference
@@ -65,11 +108,12 @@ cmake --build build
 - `sc_dt` is a top-level namespace, not `sc_core::sc_dt`.
 - Avoid the deprecated `sc_time(uint64, bool)` constructor; use `sc_time * double`.
 - With an `sc_clock` present the simulation never starves, so `sc_start()` returns
-  only because `Director` calls `sc_stop()`.
+  only because `SpikeRunner` calls `sc_stop()`.
 
 ## Style
-- `.clang-format` is the source of truth: 80 columns, 2-space indent, pointer
-  right. It uses Allman braces (`BreakBeforeBraces: Custom`, `AfterFunction` and
+- `.clang-format` is the source of truth: 120 columns, 4-space indent (access
+  modifiers at -2), pointer/reference **left** (`Type* p`, `Type& r`). It uses
+  Allman braces (`BreakBeforeBraces: Custom`, `AfterFunction` and
   `AfterControlStatement` true, `IndentBraces: false`), so **`{` goes on its own
   line** for functions and if/for/while/switch — write code that way before running
   `clang-format -i` on changed C++ files.

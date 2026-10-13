@@ -37,11 +37,39 @@ function(add_dram_target target)
         BUILD_RPATH "$<TARGET_FILE_DIR:SystemC::systemc>")
 endfunction()
 
-# DRAM-контроллер с read/write очередями и арбитражем.
-add_dram_target(dram_controller
-    src/dram_controller_base.cpp
-    src/dram_controller_async.cpp
-    src/dram_controller_sync.cpp
-    src/controller_main.cpp
-)
+# Co-simulation с Spike: MMIO-доступы RISC-V-ядра к диапазону DRAM идут
+# через TLM-контроллер. Требует собранный riscv-isa-sim (libriscv.so).
+set(SPIKE_ROOT "/home/viktor/mipt/masters_diploma/riscv-isa-sim"
+    CACHE PATH "riscv-isa-sim source/build dir")
+option(DRAM_SPIKE "Build the Spike co-simulation target" ON)
+
+if(DRAM_SPIKE AND EXISTS "${SPIKE_ROOT}/build/libriscv.so")
+    add_dram_target(spike_dram
+        src/dram_controller_base.cpp
+        src/dram_controller_async.cpp
+        src/dram_controller_sync.cpp
+        src/spike_dram_device.cpp
+        src/store_buffer.cpp
+        src/spike_dram_main.cpp
+    )
+    # NB: не добавлять ${SPIKE_ROOT}/fesvr в include-пути: его syscall.h
+    # затеняет системный <syscall.h> и ломает <memory>. Внутри htif.h
+    # соседние заголовки подключаются относительными путями.
+    target_include_directories(spike_dram PRIVATE
+        "${SPIKE_ROOT}"
+        "${SPIKE_ROOT}/riscv"
+        "${SPIKE_ROOT}/build"
+        "${SPIKE_ROOT}/softfloat"
+        "${SPIKE_ROOT}/fdt"
+    )
+    target_link_libraries(spike_dram PRIVATE
+        "${SPIKE_ROOT}/build/libriscv.so"
+        "${SPIKE_ROOT}/build/libfesvr.a"
+        "${SPIKE_ROOT}/build/libsoftfloat.so"
+        "${SPIKE_ROOT}/build/libfdt.a"
+        dl pthread z
+    )
+    set_property(TARGET spike_dram APPEND PROPERTY
+        BUILD_RPATH "${SPIKE_ROOT}/build")
+endif()
 

@@ -108,12 +108,10 @@ BraceWrapping:
   AfterClass:      true
   AfterControlStatement: Always
   AfterEnum:       true
-  AfterExportBlock: true
   AfterExternBlock: true
   AfterFunction:   true
   AfterNamespace:  true
   AfterObjCDeclaration: true
-  AfterRequiresExpression: true
   AfterStruct:     true
   AfterUnion:      true
   BeforeCatch:     true
@@ -189,7 +187,7 @@ IncludeCategories:
     CaseSensitive:   false
 IncludeIsMainRegex: '(Test)?$'
 IncludeIsMainSourceRegex: ''
-IndentAccessModifiers: Never
+IndentAccessModifiers: false
 IndentCaseBlocks: false
 IndentCaseLabels: false
 IndentExportBlock: true
@@ -218,7 +216,6 @@ IntegerLiteralSeparator:
 JavaScriptQuotes: Leave
 JavaScriptWrapImports: true
 KeepEmptyLines:
-  AtEndOfBlock:    false
   AtEndOfFile:     false
   AtStartOfBlock:  true
   AtStartOfFile:   true
@@ -261,7 +258,7 @@ PenaltyBreakTemplateDeclaration: 10
 PenaltyExcessCharacter: 1000000
 PenaltyIndentedWhitespace: 0
 PenaltyReturnTypeOnItsOwnLine: 60
-PointerAlignment: Right
+PointerAlignment: Left
 PPIndentWidth:   -1
 QualifierAlignment: Leave
 ReferenceAlignment: Pointer
@@ -279,8 +276,6 @@ SortIncludes:
   Enabled:         true
   IgnoreCase:      false
   IgnoreExtension: false
-  Natural:         false
-  FilesBeforeFolders: false
 SortJavaStaticImport: Before
 SortUsingDeclarations: LexicographicNumeric
 SpaceAfterCStyleCast: false
@@ -313,7 +308,6 @@ SpaceBeforeSquareBrackets: false
 SpaceInEmptyBraces: Never
 SpacesBeforeTrailingComments: 1
 SpacesInAngles:  Never
-SpacesInBlockComments: Leave
 SpacesInContainerLiterals: true
 SpacesInLineCommentPrefix:
   Minimum:         1

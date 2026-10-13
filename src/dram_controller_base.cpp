@@ -12,7 +12,7 @@ DramControllerBase::DramControllerBase(sc_core::sc_module_name name, unsigned si
     }
 }
 
-DramControllerBase::Dir DramControllerBase::next_request(Request &req)
+DramControllerBase::Dir DramControllerBase::next_request(Request& req)
 {
     // Конфликт: в момент выбора готовы обе очереди.
     if (!read_queue_.empty() && !write_queue_.empty())
@@ -34,13 +34,13 @@ DramControllerBase::Dir DramControllerBase::next_request(Request &req)
         dir = (rr_++ % 2) == 1 ? Dir::Write : Dir::Read;
     }
 
-    std::deque<Request> &queue = (dir == Dir::Write) ? write_queue_ : read_queue_;
+    std::deque<Request>& queue = (dir == Dir::Write) ? write_queue_ : read_queue_;
     req = queue.front();
     queue.pop_front();
     return dir;
 }
 
-void DramControllerBase::finish_request(const Request &req, Dir dir)
+void DramControllerBase::finish_request(const Request& req, Dir dir)
 {
     req.trans->set_response_status(storage_.access(*req.trans));
     if (dir == Dir::Write)
@@ -54,7 +54,7 @@ void DramControllerBase::finish_request(const Request &req, Dir dir)
     req.done->notify(sc_core::SC_ZERO_TIME);
 }
 
-void DramControllerBase::b_transport(int port, tlm::tlm_generic_payload &trans, sc_core::sc_time &delay)
+void DramControllerBase::b_transport(int port, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay)
 {
     sc_core::sc_event done;
     const Request req{&trans, port, &done};
