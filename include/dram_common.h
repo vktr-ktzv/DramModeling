@@ -4,16 +4,11 @@
 #include <cstring>
 #include <vector>
 
-#include <systemc.h>
 #include <tlm.h>
-#include <tlm_utils/simple_target_socket.h>
 
 namespace dram
 {
 
-// Общее хранилище для моделей памяти: линейный массив байт.
-// Обработка TLM-транзакции одинакова для асинхронной и синхронной DRAM,
-// различается только временная модель, поэтому она вынесена в наследников.
 class DramStorage
 {
   public:

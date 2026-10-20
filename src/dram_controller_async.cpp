@@ -3,11 +3,8 @@
 namespace dram
 {
 
-DramControllerAsync::DramControllerAsync(
-    sc_core::sc_module_name name, unsigned size_bytes, sc_core::sc_time read_latency, sc_core::sc_time write_latency,
-    sc_core::sc_time switch_penalty)
-    : DramControllerBase(name, size_bytes), read_latency_(read_latency), write_latency_(write_latency),
-      switch_penalty_(switch_penalty)
+DramControllerAsync::DramControllerAsync(sc_core::sc_module_name name, sc_core::sc_time switch_penalty)
+    : DramControllerBase(name), switch_penalty_(switch_penalty)
 {
     SC_THREAD(serve);
 }
@@ -28,7 +25,9 @@ void DramControllerAsync::serve()
             wait(switch_penalty_);
         }
 
-        wait(dir == Dir::Write ? write_latency_ : read_latency_);
+        // Задержку считает автомат банков DramChip (точные sc_time).
+        const sc_core::sc_time access = issue(req);
+        wait(access);
         finish_request(req, dir);
         remember(dir);
     }

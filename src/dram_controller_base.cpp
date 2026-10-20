@@ -3,8 +3,8 @@
 namespace dram
 {
 
-DramControllerBase::DramControllerBase(sc_core::sc_module_name name, unsigned size_bytes)
-    : sc_core::sc_module(name), storage_(size_bytes)
+DramControllerBase::DramControllerBase(sc_core::sc_module_name name)
+    : sc_core::sc_module(name), mem_socket("mem_socket")
 {
     for (int i = 0; i < kPorts; ++i)
     {
@@ -40,9 +40,17 @@ DramControllerBase::Dir DramControllerBase::next_request(Request& req)
     return dir;
 }
 
+sc_core::sc_time DramControllerBase::issue(const Request& req)
+{
+    sc_core::sc_time delay = sc_core::SC_ZERO_TIME;
+    // Блокирующий LT-вызов в DramChip: она обновляет состояние банков и
+    // возвращает задержку доступа; время продвигает уже serve().
+    mem_socket->b_transport(*req.trans, delay);
+    return delay;
+}
+
 void DramControllerBase::finish_request(const Request& req, Dir dir)
 {
-    req.trans->set_response_status(storage_.access(*req.trans));
     if (dir == Dir::Write)
     {
         ++write_count_;
@@ -54,10 +62,10 @@ void DramControllerBase::finish_request(const Request& req, Dir dir)
     req.done->notify(sc_core::SC_ZERO_TIME);
 }
 
-void DramControllerBase::b_transport(int port, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay)
+void DramControllerBase::b_transport(int, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay)
 {
     sc_core::sc_event done;
-    const Request req{&trans, port, &done};
+    const Request req{&trans, &done};
 
     if (trans.get_command() == tlm::TLM_WRITE_COMMAND)
     {

@@ -6,8 +6,8 @@ set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 NAME=${1:-dram_test}
-CC=${CC:-/opt/llvm/bin/clang}
-CXX=${CXX:-/opt/llvm/bin/clang++}
+CC=${CC:-clang}
+CXX=${CXX:-clang++}
 LD=${LD:-riscv64-linux-gnu-ld}
 
 TARGET="--target=riscv64 -march=rv64ima -mabi=lp64 -mcmodel=medany"

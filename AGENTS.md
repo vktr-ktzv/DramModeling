@@ -5,10 +5,18 @@ SystemC 3.0.2 / TLM-2.0 example of a DRAM controller in C++26. One executable,
 `spike_dram` (`src/spike_dram_main.cpp`), embeds the RISC-V Spike ISS and drives two
 controller models that share `dram::DramControllerBase`: `DramControllerAsync`
 (untimed, arbitrary `sc_time` latencies) and `DramControllerSync` (clocked via
-`sc_in<bool> clk`, whole-cycle latencies). The base owns `kPorts = 4` tagged target
-sockets, read and write queues, round-robin arbitration with a turnaround penalty,
-and back-pressure. A write-back `StoreBuffer` sits in front of the controller so
-several transactions can be in flight at once.
+`sc_in<bool> clk`). The base owns `kPorts = 2` tagged target sockets, read and write
+queues, round-robin arbitration with a turnaround penalty, and back-pressure. A
+write-back `StoreBuffer` sits in front of the controller so several transactions can
+be in flight at once.
+
+Both controllers forward every request through their `mem_socket` to a separate
+`dram::DramChip` model (`include/dram_chip.h`) that owns the banks: it runs the
+ACTIVATE/READ/WRITE/PRECHARGE state machine (tRCD/tCAS/tRP/tWR), decides row
+hit/miss, records a full command trace to CSV, and returns the access delay; the
+controller only waits it. `DramChip` is configured with a `DramTiming` whose
+`quantum` is the clock period in sync mode and `SC_ZERO_TIME` in async mode — that
+quantization is the whole timing difference between the two.
 
 `slides.md` is the source lecture (Russian) the models follow; reference material,
 not built. Some code comments are Russian to match it.
@@ -55,7 +63,7 @@ tests/spike/run_both.sh fib                       # same ELF on both controllers
 - `sc_main` picks the controller by flag: `--sync` builds `DramControllerSync`
   (`clk` driven by an `sc_clock`, period 10 ns) and `--async` builds
   `DramControllerAsync`; both live in a `unique_ptr<DramControllerBase>`, so the
-  bridges/stats code is shared. C++ tests are compiled freestanding
+  stats code is shared. C++ tests are compiled freestanding
   (`clang++ --target=riscv64 -nostdlib -ffreestanding -std=c++20`, no STL/libc)
   with `tests/spike/crt0.S` providing `_start`/`tohost`.
 - `sim_t::add_device(base, dev)` routes MMIO; `bus_t` calls `dev->load/store`
@@ -77,11 +85,23 @@ tests/spike/run_both.sh fib                       # same ELF on both controllers
 - `SPIKE_PLAN.md` has the full plan and next milestones.
 
 ## Architecture notes
-- `include/dram_common.h` (`dram::DramStorage`) owns the byte array and payload
-  read/write logic; the controller only arbitrates and annotates timing.
+- `include/dram_chip.h` (`dram::DramChip`) owns the byte array (`dram::DramStorage`
+  from `dram_common.h`) **and** the bank/row state machine + trace. It exposes one
+  `simple_target_socket` and computes access delay in `b_transport`.
+- `DramControllerBase` no longer stores data: it only arbitrates. After picking a
+  request it calls `mem_socket->b_transport(*trans, delay)` to reach `DramChip`, then
+  `serve()` does `wait(delay)`.
+- `DramChip` decodes `[col | bank | row]` (defaults 6/2 bits), keeps per-bank
+  `state` (`Idle`/`Active`) and `open_row`, and runs the FSM: precharge on row
+  conflict, then activate, then the column command. Each step is pushed onto
+  `trace_` and dumped to CSV via `dump_trace()`.
+- `DramTiming.quantum`: if non-zero every delay is rounded **up** to a multiple of it.
+  `sc_main` sets it to the clock period for `--sync` and `SC_ZERO_TIME` for `--async`,
+  which is what makes sync vs async traces diverge.
 - `DramControllerBase` registers `b_transport` on each tagged socket via
   `register_b_transport(this, &DramControllerBase::b_transport, i)`. The method is
-  `private` and takes `int port` first; this `(int, payload&, time&)` overload only
+  `private` and takes the socket tag as a first `int` argument that nobody reads
+  (queues are chosen by `trans.get_command()`); this `(int, payload&, time&)` overload only
   exists on `simple_target_socket_tagged`, not `simple_target_socket`.
 - `b_transport` is blocking, not LT-style: it queues the request, notifies
   `new_request_`, then `wait(done)` on a **local** `sc_event` (whose address is
@@ -91,8 +111,14 @@ tests/spike/run_both.sh fib                       # same ELF on both controllers
   direction round-robin from `rr_`. `turnaround()`/`remember()` track the last
   direction so a read/write switch waits `switch_penalty`.
 - `serve()` is pure virtual; each subclass starts it with `SC_THREAD(serve)` in its
-  constructor. Async waits arbitrary `sc_time`; sync waits `clk.posedge_event()`
-  and `cycles(n) = clock_period_ * n`.
+  constructor. Both call `issue()` (chip-driven delay) then `wait(delay)`; async
+  issues immediately, sync waits `clk.posedge_event()` first and also quantizes the
+  turnaround penalty with `cycles(n) = clock_period_ * n`.
+- `--trace <file>` overrides the CSV path (default `dram_trace_<mode>.csv`). Run
+  `tests/spike/run_both.sh write_burst` to see sync vs async diverge: `write_burst`
+  writes a long streaming region, then reads a same-bank/other-row region; the
+  backlog that bleeds across the two phases depends on service speed, so the two
+  controllers produce different row hit/miss and different command counts.
 - `src/spike_dram_main.cpp`: `SpikeRunner` (an `SC_THREAD`) runs the whole `sim_t`
   inside `sc_start()`; on exit it calls `store_buffer.flush()` and `sc_stop()`.
 - `include/store_buffer.h` / `src/store_buffer.cpp`: `store()` is non-blocking

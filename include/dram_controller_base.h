@@ -1,30 +1,36 @@
 #pragma once
 
-#include <cstdint>
 #include <deque>
 
-#include "dram_common.h"
+#include <systemc.h>
+#include <tlm.h>
+#include <tlm_utils/simple_initiator_socket.h>
+#include <tlm_utils/simple_target_socket.h>
 
 namespace dram
 {
 
+// Общая часть контроллера: два tagged target-сокета (порт 0 — чтения,
+// порт 1 — записи), очереди, round-robin арбитраж и учёт конфликтов.
+// Сам контроллер данные не хранит и тайминги банков не считает: он лишь
+// арбитрирует и через mem_socket передаёт запрос модели DramChip, получая
+// от неё задержку доступа.
 class DramControllerBase : public sc_core::sc_module
 {
   public:
-    static constexpr int kPorts{4};
+    static constexpr int kPorts{2};
 
     tlm_utils::simple_target_socket_tagged<DramControllerBase> socket[kPorts];
+    tlm_utils::simple_initiator_socket<DramControllerBase> mem_socket;
 
     unsigned read_count() const { return read_count_; }
     unsigned write_count() const { return write_count_; }
     unsigned conflicts() const { return conflicts_; }
-    std::uint8_t peek(unsigned addr) const { return storage_.peek(addr); }
 
   protected:
     struct Request
     {
         tlm::tlm_generic_payload* trans;
-        int port;
         sc_core::sc_event* done;
     };
 
@@ -34,11 +40,15 @@ class DramControllerBase : public sc_core::sc_module
         Write
     };
 
-    DramControllerBase(sc_core::sc_module_name name, unsigned size_bytes);
+    explicit DramControllerBase(sc_core::sc_module_name name);
 
     bool has_request() const { return !read_queue_.empty() || !write_queue_.empty(); }
 
     Dir next_request(Request& req);
+
+    // Выдаёт запрос в DramChip и возвращает задержку доступа к памяти.
+    // Состояние банков и трасса обновляются на стороне DramChip.
+    sc_core::sc_time issue(const Request& req);
 
     void finish_request(const Request& req, Dir dir);
 
@@ -53,10 +63,11 @@ class DramControllerBase : public sc_core::sc_module
     sc_core::sc_event new_request_;
 
   private:
-    void b_transport(int port, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay);
+    // Первый аргумент — тег порта от simple_target_socket_tagged; он никем не
+    // читается, очереди выбираются по trans.get_command().
+    void b_transport(int tag, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay);
     virtual void serve() = 0;
 
-    DramStorage storage_;
     std::deque<Request> read_queue_;
     std::deque<Request> write_queue_;
 

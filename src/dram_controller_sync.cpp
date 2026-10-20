@@ -4,10 +4,8 @@ namespace dram
 {
 
 DramControllerSync::DramControllerSync(
-    sc_core::sc_module_name name, unsigned size_bytes, sc_core::sc_time clock_period, unsigned read_latency_cycles,
-    unsigned write_latency_cycles, unsigned switch_penalty_cycles)
-    : DramControllerBase(name, size_bytes), clk("clk"), clock_period_(clock_period), read_latency_(read_latency_cycles),
-      write_latency_(write_latency_cycles), switch_penalty_(switch_penalty_cycles)
+    sc_core::sc_module_name name, sc_core::sc_time clock_period, unsigned switch_penalty_cycles)
+    : DramControllerBase(name), clk("clk"), clock_period_(clock_period), switch_penalty_(switch_penalty_cycles)
 {
     SC_THREAD(serve);
 }
@@ -31,7 +29,9 @@ void DramControllerSync::serve()
             wait(cycles(switch_penalty_));
         }
 
-        wait(cycles(dir == Dir::Write ? write_latency_ : read_latency_));
+        // Задержка из DramChip уже квантована по такту (quantum = clock_period).
+        const sc_core::sc_time access = issue(req);
+        wait(access);
         finish_request(req, dir);
         remember(dir);
     }

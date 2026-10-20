@@ -45,6 +45,7 @@ option(DRAM_SPIKE "Build the Spike co-simulation target" ON)
 
 if(DRAM_SPIKE AND EXISTS "${SPIKE_ROOT}/build/libriscv.so")
     add_dram_target(spike_dram
+        src/dram_chip.cpp
         src/dram_controller_base.cpp
         src/dram_controller_async.cpp
         src/dram_controller_sync.cpp

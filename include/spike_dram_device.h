@@ -5,14 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <utility>
 
 namespace dram
 {
 
-// MMIO-устройство Spike, перенаправляющее load/store в TLM-инициатор
-// (наш DRAM-контроллер). Регистрируется через sim_t::add_device(base, dev).
-// bus_t передаёт сюда уже смещённый адрес (paddr - base), т.е. offset.
 class SpikeTlmDevice : public abstract_device_t
 {
   public:

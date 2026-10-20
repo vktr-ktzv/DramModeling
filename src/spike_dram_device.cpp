@@ -1,5 +1,7 @@
 #include "spike_dram_device.h"
 
+#include <utility>
+
 namespace dram
 {
 
