@@ -219,17 +219,17 @@ int sc_main(int argc, char** argv)
         chip.dump_trace(trace_path);
         std::cout << "trace -> " << trace_path << " (" << chip.trace_entries().size() << " commands)" << std::endl;
 
-        std::cout << "DRAM[0..29]:";
-        for (unsigned i = 0; i < 30; ++i)
-        {
-            std::uint64_t value = 0;
-            for (unsigned b = 0; b < 8; ++b)
-            {
-                value |= static_cast<std::uint64_t>(chip.peek(i * 8 + b)) << (8 * b);
-            }
-            std::cout << ' ' << value;
-        }
-        std::cout << std::endl;
+        // std::cout << "DRAM[0..29]:";
+        // for (unsigned i = 0; i < 30; ++i)
+        // {
+        //     std::uint64_t value = 0;
+        //     for (unsigned b = 0; b < 8; ++b)
+        //     {
+        //         value |= static_cast<std::uint64_t>(chip.peek(i * 8 + b)) << (8 * b);
+        //     }
+        //     std::cout << ' ' << value;
+        // }
+        // std::cout << std::endl;
     }
 
     for (auto& m : mems)
