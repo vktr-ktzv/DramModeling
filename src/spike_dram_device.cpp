@@ -5,7 +5,10 @@
 namespace dram
 {
 
-SpikeTlmDevice::SpikeTlmDevice(std::uint64_t size, Transfer transfer) : size_(size), transfer_(std::move(transfer)) {}
+SpikeTlmDevice::SpikeTlmDevice(std::uint64_t size, Load load, Store store)
+    : size_(size), load_(std::move(load)), store_(std::move(store))
+{
+}
 
 bool SpikeTlmDevice::in_range(reg_t offset, size_t len) const { return offset <= size_ && len <= size_ - offset; }
 
@@ -15,7 +18,7 @@ bool SpikeTlmDevice::load(reg_t offset, size_t len, uint8_t* bytes)
     {
         return false;
     }
-    return transfer_(false, offset, bytes, len);
+    return load_(offset, bytes, len);
 }
 
 bool SpikeTlmDevice::store(reg_t offset, size_t len, const uint8_t* bytes)
@@ -24,7 +27,7 @@ bool SpikeTlmDevice::store(reg_t offset, size_t len, const uint8_t* bytes)
     {
         return false;
     }
-    return transfer_(true, offset, const_cast<uint8_t*>(bytes), len);
+    return store_(offset, bytes, len);
 }
 
 reg_t SpikeTlmDevice::size() { return size_; }

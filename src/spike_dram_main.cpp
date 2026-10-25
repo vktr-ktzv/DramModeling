@@ -1,8 +1,10 @@
 #include "config.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,6 +17,7 @@
 #include "dram_chip.h"
 #include "dram_controller_async.h"
 #include "dram_controller_sync.h"
+#include "simple_memory.h"
 #include "spike_dram_device.h"
 #include "store_buffer.h"
 
@@ -86,19 +89,22 @@ class SpikeRunner : public sc_core::sc_module
         SC_THREAD(run);
     }
 
+    int exit_code() const { return exit_code_; }
+
   private:
     void run()
     {
-        const int code = sim_->run();
+        exit_code_ = sim_->run();
         // Дожидаемся, пока отложенные записи дойдут до DRAM
         buffer_->flush();
         std::cout << "Spike finished: insns=" << sim_->insns() << ", time=" << sc_core::sc_time_stamp()
-                  << ", exit code = " << code << std::endl;
+                  << ", exit code = " << exit_code_ << std::endl;
         sc_core::sc_stop();
     }
 
     CosimSim* sim_;
     StoreBuffer* buffer_;
+    int exit_code_{0};
 };
 
 } // namespace
@@ -121,8 +127,13 @@ int sc_main(int argc, char** argv)
         {
             use_sync = false;
         }
-        else if (arg == "--trace" && i + 1 < argc)
+        else if (arg == "--trace")
         {
+            if (i + 1 >= argc)
+            {
+                std::cerr << "--trace requires a file path" << std::endl;
+                return 1;
+            }
             trace_path = argv[++i];
         }
         else
@@ -138,31 +149,38 @@ int sc_main(int argc, char** argv)
     // Один и тот же такт задаёт и период инструкции, и (для sync) период clk.
     const sc_time clock_period(10, SC_NS);
 
-    // Тайминги банков DRAM одинаковы для обеих моделей. Отличие в том, что
-    // синхронная модель квантует каждую задержку по такту (quantum), а
-    // асинхронная работает с точными наносекундами (quantum == 0).
+    // Тайминги детальной банковой модели (только async): точные наносекунды.
     const DramTiming timing{
-        sc_time(12, SC_NS), sc_time(22, SC_NS), sc_time(12, SC_NS), sc_time(12, SC_NS),
-        use_sync ? clock_period : SC_ZERO_TIME};
+        sc_time(12, SC_NS), sc_time(22, SC_NS), sc_time(12, SC_NS), sc_time(12, SC_NS)};
 
-    DramChip chip("dram_chip", kDramSize, timing);
+    // Простая синхронная модель: фиксированные задержки в тактах, без банков.
+    // Это независимые параметры приближённой модели (не выводятся из DramTiming).
+    // Turnaround выровнен с async: 2 такта по 10 нс = 20 нс.
+    constexpr unsigned kSyncReadCycles = 3;
+    constexpr unsigned kSyncWriteCycles = 2;
+    constexpr unsigned kSyncSwitchCycles = 2;
 
     std::unique_ptr<sc_clock> clk;
     std::unique_ptr<DramControllerBase> ctrl;
+    std::unique_ptr<DramChip> chip;
+    std::unique_ptr<SimpleMemory> simple_memory;
     if (use_sync)
     {
-        auto sync = std::make_unique<DramControllerSync>("dram_ctrl", clock_period, 1);
+        auto sync = std::make_unique<DramControllerSync>(
+            "dram_ctrl", clock_period, kSyncReadCycles, kSyncWriteCycles, kSyncSwitchCycles);
         clk = std::make_unique<sc_clock>("clk", clock_period);
         sync->clk(*clk);
+        simple_memory = std::make_unique<SimpleMemory>("simple_memory", kDramSize);
+        sync->mem_socket.bind(simple_memory->socket);
         ctrl = std::move(sync);
     }
     else
     {
-        ctrl = std::make_unique<DramControllerAsync>("dram_ctrl", sc_time(20, SC_NS));
+        chip = std::make_unique<DramChip>("dram_chip", kDramSize, timing);
+        auto async = std::make_unique<DramControllerAsync>("dram_ctrl", sc_time(20, SC_NS));
+        async->mem_socket.bind(chip->socket);
+        ctrl = std::move(async);
     }
-
-    // Контроллер подключён к модели DRAM: тайминги банков считает она.
-    ctrl->mem_socket.bind(chip.socket);
 
     // Доступы Spike идут через буфер: чтения — порт 0, записи  — порт 1.
     StoreBuffer buffer("store_buffer");
@@ -170,8 +188,11 @@ int sc_main(int argc, char** argv)
     buffer.write_socket.bind(ctrl->socket[1]);
 
     auto device = std::make_shared<SpikeTlmDevice>(
-        kDramSize, [buf = &buffer](bool write, std::uint64_t offset, std::uint8_t* data, std::size_t len)
-        { return write ? buf->store(offset, data, len) : buf->load(offset, data, len); });
+        kDramSize,
+        [buf = &buffer](std::uint64_t offset, std::uint8_t* data, std::size_t len)
+        { return buf->load(offset, data, len); },
+        [buf = &buffer](std::uint64_t offset, const std::uint8_t* data, std::size_t len)
+        { return buf->store(offset, data, len); });
 
     cfg_t cfg;
     cfg.mem_layout = {mem_cfg_t(kMemBase, kMemSize)};
@@ -190,6 +211,7 @@ int sc_main(int argc, char** argv)
 
     constexpr unsigned long long kMaxInsns = 50000000ULL;
     const sc_time cycle = clock_period;
+    int exit_code = 0;
 
     {
         CosimSim sim(
@@ -204,37 +226,49 @@ int sc_main(int argc, char** argv)
         SpikeRunner runner("runner", &sim, &buffer);
 
         sc_start();
+        exit_code = runner.exit_code();
 
         std::cout << (use_sync ? "sync" : "async") << " controller: reads=" << ctrl->read_count()
                   << " writes=" << ctrl->write_count() << " conflicts=" << ctrl->conflicts() << std::endl;
 
-        const unsigned accesses = chip.reads() + chip.writes();
-        const double avg_latency =
-            accesses == 0 ? 0.0 : (chip.total_latency() / sc_time(1, SC_NS)) / accesses;
-        std::cout << (use_sync ? "sync" : "async") << " dram: reads=" << chip.reads() << " writes=" << chip.writes()
-                  << " activations=" << chip.activations() << " precharges=" << chip.precharges()
-                  << " row_hits=" << chip.row_hits() << " row_misses=" << chip.row_misses()
-                  << " row_empties=" << chip.row_empties() << " avg_latency=" << avg_latency << " ns" << std::endl;
+        if (use_sync)
+        {
+            const unsigned accesses = ctrl->read_count() + ctrl->write_count();
+            const double total_latency_ns =
+                (static_cast<double>(ctrl->read_count()) * kSyncReadCycles +
+                 static_cast<double>(ctrl->write_count()) * kSyncWriteCycles) *
+                (clock_period / sc_time(1, SC_NS));
+            const double avg_latency = accesses == 0 ? 0.0 : total_latency_ns / accesses;
+            std::cout << "sync memory: reads=" << ctrl->read_count() << " writes=" << ctrl->write_count()
+                      << " read_latency=" << (clock_period * static_cast<double>(kSyncReadCycles)) / sc_time(1, SC_NS)
+                      << " ns write_latency="
+                      << (clock_period * static_cast<double>(kSyncWriteCycles)) / sc_time(1, SC_NS)
+                      << " ns avg_latency=" << avg_latency << " ns" << std::endl;
 
-        chip.dump_trace(trace_path);
-        std::cout << "trace -> " << trace_path << " (" << chip.trace_entries().size() << " commands)" << std::endl;
+            simple_memory->dump_trace(trace_path);
+            std::cout << "trace -> " << trace_path << " (" << simple_memory->accesses().size() << " accesses)"
+                      << std::endl;
+        }
+        else
+        {
+            const unsigned accesses = chip->reads() + chip->writes();
+            const double avg_latency =
+                accesses == 0 ? 0.0 : (chip->total_latency() / sc_time(1, SC_NS)) / accesses;
+            std::cout << "async dram: reads=" << chip->reads() << " writes=" << chip->writes()
+                      << " activations=" << chip->activations() << " precharges=" << chip->precharges()
+                      << " row_hits=" << chip->row_hits() << " row_misses=" << chip->row_misses()
+                      << " row_empties=" << chip->row_empties() << " avg_latency=" << avg_latency << " ns"
+                      << std::endl;
 
-        // std::cout << "DRAM[0..29]:";
-        // for (unsigned i = 0; i < 30; ++i)
-        // {
-        //     std::uint64_t value = 0;
-        //     for (unsigned b = 0; b < 8; ++b)
-        //     {
-        //         value |= static_cast<std::uint64_t>(chip.peek(i * 8 + b)) << (8 * b);
-        //     }
-        //     std::cout << ' ' << value;
-        // }
-        // std::cout << std::endl;
+            chip->dump_trace(trace_path);
+            std::cout << "trace -> " << trace_path << " (" << chip->trace_entries().size() << " commands)"
+                      << std::endl;
+        }
     }
 
     for (auto& m : mems)
     {
         delete m.second;
     }
-    return 0;
+    return exit_code;
 }

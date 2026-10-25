@@ -16,8 +16,6 @@ class DramStorage
 
     unsigned size() const { return static_cast<unsigned>(mem_.size()); }
 
-    std::uint8_t peek(unsigned addr) const { return addr < mem_.size() ? mem_[addr] : 0; }
-
     tlm::tlm_response_status access(tlm::tlm_generic_payload& trans)
     {
         const std::uint64_t addr = trans.get_address();

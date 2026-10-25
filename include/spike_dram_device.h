@@ -12,9 +12,10 @@ namespace dram
 class SpikeTlmDevice : public abstract_device_t
 {
   public:
-    using Transfer = std::function<bool(bool write, std::uint64_t offset, std::uint8_t* data, std::size_t len)>;
+    using Load = std::function<bool(std::uint64_t offset, std::uint8_t* data, std::size_t len)>;
+    using Store = std::function<bool(std::uint64_t offset, const std::uint8_t* data, std::size_t len)>;
 
-    SpikeTlmDevice(std::uint64_t size, Transfer transfer);
+    SpikeTlmDevice(std::uint64_t size, Load load, Store store);
 
     bool load(reg_t addr, size_t len, uint8_t* bytes) override;
     bool store(reg_t addr, size_t len, const uint8_t* bytes) override;
@@ -24,7 +25,8 @@ class SpikeTlmDevice : public abstract_device_t
     bool in_range(reg_t offset, size_t len) const;
 
     std::uint64_t size_;
-    Transfer transfer_;
+    Load load_;
+    Store store_;
 };
 
 } // namespace dram

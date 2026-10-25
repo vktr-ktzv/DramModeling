@@ -43,8 +43,9 @@ DramControllerBase::Dir DramControllerBase::next_request(Request& req)
 sc_core::sc_time DramControllerBase::issue(const Request& req)
 {
     sc_core::sc_time delay = sc_core::SC_ZERO_TIME;
-    // Блокирующий LT-вызов в DramChip: она обновляет состояние банков и
-    // возвращает задержку доступа; время продвигает уже serve().
+    // Блокирующий LT-вызов в модель памяти: DramChip обновляет банки и
+    // возвращает задержку доступа, SimpleMemory применяет данные и возвращает
+    // ноль. Время продвигает уже serve().
     mem_socket->b_transport(*req.trans, delay);
     return delay;
 }
@@ -64,10 +65,18 @@ void DramControllerBase::finish_request(const Request& req, Dir dir)
 
 void DramControllerBase::b_transport(int, tlm::tlm_generic_payload& trans, sc_core::sc_time& delay)
 {
+    const tlm::tlm_command cmd = trans.get_command();
+    if (cmd != tlm::TLM_READ_COMMAND && cmd != tlm::TLM_WRITE_COMMAND)
+    {
+        trans.set_response_status(tlm::TLM_COMMAND_ERROR_RESPONSE);
+        delay = sc_core::SC_ZERO_TIME;
+        return;
+    }
+
     sc_core::sc_event done;
     const Request req{&trans, &done};
 
-    if (trans.get_command() == tlm::TLM_WRITE_COMMAND)
+    if (cmd == tlm::TLM_WRITE_COMMAND)
     {
         write_queue_.push_back(req);
     }

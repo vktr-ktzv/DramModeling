@@ -12,9 +12,9 @@ namespace dram
 
 // Общая часть контроллера: два tagged target-сокета (порт 0 — чтения,
 // порт 1 — записи), очереди, round-robin арбитраж и учёт конфликтов.
-// Сам контроллер данные не хранит и тайминги банков не считает: он лишь
-// арбитрирует и через mem_socket передаёт запрос модели DramChip, получая
-// от неё задержку доступа.
+// Сам контроллер данные не хранит: он лишь арбитрирует и через mem_socket
+// передаёт запрос модели памяти (DramChip — детальной, SimpleMemory — простой),
+// получая от неё задержку доступа (для SimpleMemory она нулевая).
 class DramControllerBase : public sc_core::sc_module
 {
   public:
@@ -46,8 +46,9 @@ class DramControllerBase : public sc_core::sc_module
 
     Dir next_request(Request& req);
 
-    // Выдаёт запрос в DramChip и возвращает задержку доступа к памяти.
-    // Состояние банков и трасса обновляются на стороне DramChip.
+    // Выдаёт запрос в модель памяти и возвращает её задержку доступа.
+    // Для DramChip состояние банков и трасса обновляются на её стороне;
+    // SimpleMemory только применяет данные и возвращает ноль.
     sc_core::sc_time issue(const Request& req);
 
     void finish_request(const Request& req, Dir dir);

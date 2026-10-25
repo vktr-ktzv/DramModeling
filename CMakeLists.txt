@@ -23,14 +23,11 @@ list(APPEND CMAKE_PREFIX_PATH "${SYSTEMC_ROOT}")
 find_package(SystemCLanguage CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
-
-
 function(add_dram_target target)
     add_executable(${target} ${ARGN})
     target_include_directories(${target} PRIVATE include)
     target_link_libraries(${target} PRIVATE SystemC::systemc Threads::Threads)
     target_compile_options(${target} PRIVATE -Wall -Wextra)
-
 
     # Позволяет запускать собранный бинарник без LD_LIBRARY_PATH.
     set_target_properties(${target} PROPERTIES
@@ -49,6 +46,7 @@ if(DRAM_SPIKE AND EXISTS "${SPIKE_ROOT}/build/libriscv.so")
         src/dram_controller_base.cpp
         src/dram_controller_async.cpp
         src/dram_controller_sync.cpp
+        src/simple_memory.cpp
         src/spike_dram_device.cpp
         src/store_buffer.cpp
         src/spike_dram_main.cpp

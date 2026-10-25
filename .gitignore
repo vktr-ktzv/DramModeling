@@ -6,3 +6,6 @@ build-*/
 *.elf
 
 .cache/
+
+# Runtime-generated access traces
+dram_trace_*.csv

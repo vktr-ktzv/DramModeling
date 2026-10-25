@@ -18,7 +18,6 @@ struct DramTiming
     sc_core::sc_time t_cas; // CAS latency: доступ к столбцу
     sc_core::sc_time t_rp;  // PRECHARGE
     sc_core::sc_time t_wr;  // write recovery
-    sc_core::sc_time quantum{sc_core::SC_ZERO_TIME};
 };
 
 class DramChip : public sc_core::sc_module
@@ -26,7 +25,7 @@ class DramChip : public sc_core::sc_module
   public:
     enum class BankState
     {
-        Idle,   
+        Idle,
         Active, // строка открыта в row buffer
     };
 
@@ -38,17 +37,16 @@ class DramChip : public sc_core::sc_module
         Precharge,
     };
 
-   
     enum class RowAccess
     {
         Empty, // строка не была открыта
-        Hit,   
-        Miss,  
+        Hit,
+        Miss,
     };
 
     struct TraceEntry
     {
-        sc_core::sc_time time; 
+        sc_core::sc_time time;
         Command command;
         RowAccess row_access;
         bool write;
@@ -75,10 +73,8 @@ class DramChip : public sc_core::sc_module
 
     const std::vector<TraceEntry>& trace_entries() const { return trace_; }
 
-    // Выгружает полную трассу обращений в CSV (для diff между sync и async).
+    // Выгружает полную трассу банковых команд в CSV (async).
     void dump_trace(const std::string& path) const;
-
-    std::uint8_t peek(unsigned addr) const { return storage_.peek(addr); }
 
   private:
     struct Bank
@@ -97,7 +93,6 @@ class DramChip : public sc_core::sc_module
     void b_transport(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay);
 
     Decoded decode(std::uint64_t addr) const;
-    sc_core::sc_time quantize(sc_core::sc_time delay) const;
 
     // Автомат: обслужить запрос, изменить состояние банков, записать трассу
     // и вернуть суммарную задержку доступа.

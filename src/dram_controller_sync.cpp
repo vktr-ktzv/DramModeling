@@ -4,8 +4,10 @@ namespace dram
 {
 
 DramControllerSync::DramControllerSync(
-    sc_core::sc_module_name name, sc_core::sc_time clock_period, unsigned switch_penalty_cycles)
-    : DramControllerBase(name), clk("clk"), clock_period_(clock_period), switch_penalty_(switch_penalty_cycles)
+    sc_core::sc_module_name name, sc_core::sc_time clock_period, unsigned read_latency_cycles,
+    unsigned write_latency_cycles, unsigned switch_penalty_cycles)
+    : DramControllerBase(name), clk("clk"), clock_period_(clock_period), read_latency_cycles_(read_latency_cycles),
+      write_latency_cycles_(write_latency_cycles), switch_penalty_cycles_(switch_penalty_cycles)
 {
     SC_THREAD(serve);
 }
@@ -26,12 +28,13 @@ void DramControllerSync::serve()
         const Dir dir = next_request(req);
         if (turnaround(dir))
         {
-            wait(cycles(switch_penalty_));
+            wait(cycles(switch_penalty_cycles_));
         }
 
-        // Задержка из DramChip уже квантована по такту (quantum = clock_period).
-        const sc_core::sc_time access = issue(req);
-        wait(access);
+        // Простая модель: данные применяет SimpleMemory, а задержку задаёт
+        // сам контроллер фиксированным числом тактов на чтение/запись.
+        (void)issue(req);
+        wait(cycles(dir == Dir::Write ? write_latency_cycles_ : read_latency_cycles_));
         finish_request(req, dir);
         remember(dir);
     }

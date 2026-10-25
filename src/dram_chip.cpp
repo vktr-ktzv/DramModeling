@@ -1,6 +1,5 @@
 #include "dram_chip.h"
 
-#include <cmath>
 #include <fstream>
 
 #include <tlm.h>
@@ -30,17 +29,7 @@ DramChip::Decoded DramChip::decode(std::uint64_t addr) const
     return d;
 }
 
-sc_core::sc_time DramChip::quantize(sc_core::sc_time delay) const
-{
-    if (timing_.quantum == sc_core::SC_ZERO_TIME)
-    {
-        return delay;
-    }
-    const double units = std::ceil(delay / timing_.quantum - 1e-9);
-    return timing_.quantum * units;
-}
-
-// Конечный автомат банка 
+// Конечный автомат банка
 //   Idle --Activate--> Active --Read/Write--> Active --Precharge--> Idle
 // Если открыта другая строка, сначала PRECHARGE, затем ACTIVATE новой.
 sc_core::sc_time DramChip::issue(tlm::tlm_generic_payload& trans, Decoded addr, bool write)
@@ -50,11 +39,10 @@ sc_core::sc_time DramChip::issue(tlm::tlm_generic_payload& trans, Decoded addr, 
     sc_core::sc_time cursor = now;
     sc_core::sc_time latency = sc_core::SC_ZERO_TIME;
 
-    RowAccess access;
+    RowAccess access = RowAccess::Empty;
     switch (bank.state)
     {
     case BankState::Idle:
-        access = RowAccess::Empty;
         ++row_empties_;
         break;
     case BankState::Active:
@@ -69,16 +57,13 @@ sc_core::sc_time DramChip::issue(tlm::tlm_generic_payload& trans, Decoded addr, 
             ++row_misses_;
         }
         break;
-    default:
-        access = RowAccess::Empty;
-        break;
     }
 
     if (access != RowAccess::Hit)
     {
         if (access == RowAccess::Miss)
         {
-            const sc_core::sc_time d_rp = quantize(timing_.t_rp);
+            const sc_core::sc_time d_rp = timing_.t_rp;
             trace_.push_back({cursor, Command::Precharge, access, write, addr.bank,
                               static_cast<unsigned>(bank.open_row), addr.col, d_rp});
             cursor += d_rp;
@@ -86,7 +71,7 @@ sc_core::sc_time DramChip::issue(tlm::tlm_generic_payload& trans, Decoded addr, 
             ++precharges_;
         }
 
-        const sc_core::sc_time d_rcd = quantize(timing_.t_rcd);
+        const sc_core::sc_time d_rcd = timing_.t_rcd;
         trace_.push_back({cursor, Command::Activate, access, write, addr.bank, addr.row, addr.col, d_rcd});
         cursor += d_rcd;
         latency += d_rcd;
@@ -96,10 +81,10 @@ sc_core::sc_time DramChip::issue(tlm::tlm_generic_payload& trans, Decoded addr, 
         bank.state = BankState::Active;
     }
 
-    const sc_core::sc_time d_cas = quantize(timing_.t_cas);
+    const sc_core::sc_time d_cas = timing_.t_cas;
     if (write)
     {
-        const sc_core::sc_time d_wr = quantize(timing_.t_wr);
+        const sc_core::sc_time d_wr = timing_.t_wr;
         trace_.push_back({cursor, Command::Write, access, write, addr.bank, addr.row, addr.col, d_cas + d_wr});
         latency += d_cas + d_wr;
         ++writes_;
@@ -127,7 +112,8 @@ void DramChip::b_transport(tlm::tlm_generic_payload& trans, sc_core::sc_time& de
 
     const std::uint64_t addr = trans.get_address();
     const unsigned len = trans.get_data_length();
-    if (trans.get_data_ptr() == nullptr || addr > storage_.size() || len > storage_.size() - addr)
+    const unsigned size = storage_.size();
+    if (trans.get_data_ptr() == nullptr || addr > size || len > size - addr)
     {
         trans.set_response_status(tlm::TLM_ADDRESS_ERROR_RESPONSE);
         return;
