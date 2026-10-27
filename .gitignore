@@ -9,3 +9,7 @@ build-*/
 
 # Runtime-generated access traces
 dram_trace_*.csv
+
+# Python caches
+__pycache__/
+*.pyc

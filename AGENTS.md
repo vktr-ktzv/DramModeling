@@ -21,6 +21,10 @@ controller waits a fixed `read_latency_cycles`/`write_latency_cycles`. So sync h
 no bank state, row hit/miss, activations, or precharge — it is deliberately the
 coarser model.
 
+`tools/trace_stats.py` is a dependency-free Python 3 helper that parses the CSV
+traces from either model and compares them via `mem_busy = access_time +
+turnaround_time` (see "Trace analysis" below). It is not part of the C++ build.
+
 `../perf-modeling-lectures` holds the source lectures (Russian) the models
 follow; reference material, not built. Some code comments are Russian to match it.
 
@@ -84,6 +88,29 @@ tests/spike/run_both.sh fib                       # same ELF on both controllers
 - `triggers`/CLINT/PLIC are absent because `sim_t` is built with
   `dtb_enabled=false` and `start_pc` set explicitly.
 
+## Trace analysis (`tools/trace_stats.py`)
+Dependency-free Python 3; reads the CSV written by `--trace`, auto-detects the
+format from the header, and reports `mem_busy = access_time + turnaround_time`:
+
+```sh
+./build/spike_dram --async --trace /tmp/async.csv tests/spike/write_burst.elf
+./build/spike_dram --sync  --trace /tmp/sync.csv  tests/spike/write_burst.elf
+python3 tools/trace_stats.py /tmp/async.csv /tmp/sync.csv
+```
+
+- async: `access_time` is the sum of `latency_ns` over all command rows (so
+  ACT/PRE/RD/WR contributions and row hit/miss are included); sync has no
+  `latency_ns`, so it uses `reads * --read-ns + writes * --write-ns` (defaults
+  30/20 ns = 3/2 cycles at 10 ns).
+- `turnaround_time` is the number of `RD`↔`WR` changes among access rows times
+  `--switch-ns` (default 20 ns) for both models.
+- With two traces, async is the reference; comparison prints `mem_busy_ns`,
+  `access_ns`, and `avg_mem_ns` (`turnaround_ns` only appears in the table).
+  `--mode auto|async|sync` overrides detection; `--csv-out <file>` writes metrics.
+- Do not compare bank counters: `SimpleMemory` has none. Compare `mem_busy` and
+  its components, or full simulation time separately (it includes instruction
+  cycles and idle time, which `mem_busy` does not).
+
 ## Architecture notes
 - `include/dram_chip.h` (`dram::DramChip`) owns the byte array (`dram::DramStorage`
   from `dram_common.h`) **and** the bank/row state machine + trace. It is the async
@@ -116,7 +143,9 @@ tests/spike/run_both.sh fib                       # same ELF on both controllers
 - `serve()` is pure virtual; each subclass starts it with `SC_THREAD(serve)` in its
   constructor. Async calls `issue()` and waits the chip-computed delay immediately.
   Sync waits `clk.posedge_event()` first, calls `issue()` (SimpleMemory returns
-  zero), then waits `cycles(read_latency_cycles | write_latency_cycles)`.
+  zero), then waits `cycles(read_latency_cycles | write_latency_cycles)`; a
+  direction change additionally waits `cycles(switch_penalty_cycles)`, so sync also
+  pays the 20 ns turnaround penalty by default.
 - `--trace <file>` overrides the CSV path (default `dram_trace_<mode>.csv`). Async
   writes bank commands (`ACT/PRE/RD/WR`); sync writes one row per access (`RD/WR`).
   Run `tests/spike/run_both.sh write_burst` to compare: the async detailed model

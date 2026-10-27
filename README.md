@@ -40,16 +40,19 @@
 │   ├── store_buffer.cpp
 │   └── spike_dram_main.cpp     # sc_main co-simulation (CosimSim + SpikeRunner)
 │
-└── tests/spike/
-    ├── build.sh                # build.sh [name] — собирает <name>.cpp (+crt0) или <name>.S
-    ├── run_both.sh             # run_both.sh [name] — один ELF на async и sync
-    ├── crt0.S                  # старт C++-тестов: стек, вызов main(), выход через HTIF
-    ├── link.ld                 # линкер-скрипт: код с 0x8000_0000
-    ├── dram_test.S             # asm-тест: sw/lw в 0x4000_0000
-    ├── fib.cpp                 # C++-тест: числа Фибоначчи через DRAM-контроллер
-    ├── write_pair.cpp          # две записи + чтение: конфликты на async и sync
-    ├── blocked_copy.cpp        # блочный memcpy: много конфликтов чтение/запись
-    └── write_burst.cpp         # бенчмарк для сравнения моделей
+├── tests/spike/
+│   ├── build.sh                # build.sh [name] — собирает <name>.cpp (+crt0) или <name>.S
+│   ├── run_both.sh             # run_both.sh [name] — один ELF на async и sync
+│   ├── crt0.S                  # старт C++-тестов: стек, вызов main(), выход через HTIF
+│   ├── link.ld                 # линкер-скрипт: код с 0x8000_0000
+│   ├── dram_test.S             # asm-тест: sw/lw в 0x4000_0000
+│   ├── fib.cpp                 # C++-тест: числа Фибоначчи через DRAM-контроллер
+│   ├── write_pair.cpp          # две записи + чтение: конфликты на async и sync
+│   ├── blocked_copy.cpp        # блочный memcpy: много конфликтов чтение/запись
+│   └── write_burst.cpp         # бенчмарк для сравнения моделей
+│
+└── tools/
+    └── trace_stats.py          # mem_busy = access + turnaround по CSV-трассам
 ```
 
 ### Роли модулей
@@ -107,7 +110,8 @@
   `DramChip::b_transport`, возвращающий задержку доступа (точные нс), и
   `wait(access)`;
 - sync: каждую итерацию `wait(clk.posedge_event())`, затем фиксированная
-  задержка `cycles(read_latency_cycles)` или `cycles(write_latency_cycles)`;
+  задержка `cycles(read_latency_cycles)` или `cycles(write_latency_cycles)`
+  (при смене направления — ещё `cycles(switch_penalty_cycles)`);
   `SimpleMemory::b_transport` только применяет данные и время не двигает.
 
 К моменту возврата из `b_transport` планировщик уже продвинул время, поэтому
@@ -141,7 +145,9 @@ Idle --ACTIVATE--> Active --READ/WRITE--> Active --PRECHARGE--> Idle
 
 В sync-режиме банков нет: `DramControllerSync` выдаёт команду по фронту `clk`,
 применяет данные через `SimpleMemory` и ждёт фиксированное число тактов
-(`kSyncReadCycles`/`kSyncWriteCycles` в `sc_main`, по умолчанию 3 и 2). Поэтому
+(`kSyncReadCycles`/`kSyncWriteCycles` в `sc_main`, по умолчанию 3 и 2; штраф
+смены направления — `kSyncSwitchCycles = 2`, то есть те же 20 нс, что и у
+async). Поэтому
 у sync нет row hit/miss, активаций и precharge — это осознанно более грубая
 модель. Трасса sync содержит только сами обращения:
 
@@ -190,6 +196,110 @@ time_ns,command,type,addr,len
 ```
 
 Обе пишутся в `dram_trace_<mode>.csv` (или в файл из `--trace <file>`).
+
+### Анализ трасс: `tools/trace_stats.py`
+
+Скрипт считает по CSV-трассам занятость контроллера памятью:
+
+```
+mem_busy = access_time + turnaround_time
+```
+
+`mem_busy` — это время, которое контроллер потратил на доступ к памяти и на
+штрафы за смену направления `read <-> write`. Простой в ожидании запросов,
+время инструкций и ожидание такта сюда не входят.
+
+#### Что нужно для запуска
+
+Нужен Python 3, сторонних зависимостей нет. Трассы создаются самим
+`spike_dram`:
+
+```sh
+./build/spike_dram --async --trace /tmp/async.csv tests/spike/write_burst.elf
+./build/spike_dram --sync  --trace /tmp/sync.csv  tests/spike/write_burst.elf
+```
+
+Без `--trace` трассы пишутся в `dram_trace_async.csv` / `dram_trace_sync.csv`
+в текущем каталоге (эти файлы в `.gitignore`).
+
+#### Быстрый старт
+
+```sh
+python3 tools/trace_stats.py /tmp/async.csv /tmp/sync.csv
+```
+
+Формат трассы определяется автоматически по заголовку CSV: async-трасса
+содержит `row_access` и `latency_ns`, sync-трасса — `type`, `addr`, `len`.
+При необходимости формат можно задать явно: `--mode async` или `--mode sync`.
+
+Пример вывода:
+
+```
+file                         mode        acc       rd       wr  turns    access_ns    turn_ns   mem_busy_ns  avg_mem_ns
+trace_async.csv              async     24576    16384     8192      1     712656.0       20.0      712676.0      28.999
+trace_sync.csv               sync      24576    16384     8192      1     655360.0       20.0      655380.0      26.667
+
+reference: /tmp/async.csv (async)
+compared:  /tmp/sync.csv (sync)
+
+metric                reference       compared          delta  abs_error
+mem_busy_ns          712676.000     655380.000     -57296.000      8.04%
+access_ns            712656.000     655360.000     -57296.000      8.04%
+avg_mem_ns               28.999         26.667         -2.331      8.04%
+```
+
+Сравнение печатает `mem_busy_ns`, `access_ns` и `avg_mem_ns`; `turnaround_ns`
+отдельной строкой не выводится, но уже входит в `mem_busy_ns`. Если переданы
+две трассы, async автоматически выбирается как reference, а для sync считается
+`abs_error = |sync - async| / async`. Если обе трассы одного типа, reference —
+первая.
+
+#### Откуда берутся компоненты
+
+- **async**: `access_time` — сумма `latency_ns` по всем банковским командам
+  (`ACT/PRE/RD/WR`), поэтому row hit/miss и precharge учитываются автоматически.
+- **sync**: `latency_ns` в трассе нет. `access_time` считается как
+  `reads * --read-ns + writes * --write-ns`. По умолчанию это 30 и 20 нс, что
+  соответствует `kSyncReadCycles = 3`, `kSyncWriteCycles = 2` при такте 10 нс.
+- **turnaround** в обеих моделях: число смен `RD/WR` в последовательности
+  обращений умножается на `--switch-ns` (по умолчанию 20 нс).
+
+Если в `sc_main` изменены `kSyncReadCycles`/`kSyncWriteCycles`/`kSyncSwitchCycles`
+или штраф за смену направления, передай новые значения:
+
+```sh
+python3 tools/trace_stats.py /tmp/sync.csv \
+    --read-ns 40 --write-ns 30 --switch-ns 20
+```
+
+Для async `--read-ns`/`--write-ns` игнорируются: задержки уже лежат в трассе.
+`--switch-ns` для async тоже нужно менять, если в `sc_main` изменён
+`DramControllerAsync::switch_penalty`.
+
+#### Полезные опции
+
+```sh
+python3 tools/trace_stats.py /tmp/async.csv                 # одна трасса
+python3 tools/trace_stats.py /tmp/async.csv /tmp/sync.csv   # сравнение
+python3 tools/trace_stats.py /tmp/sync.csv --csv-out metrics.csv
+python3 tools/trace_stats.py --mode sync /tmp/trace.csv ...
+```
+
+- `--csv-out <file>` — записать метрики всех переданных трасс в CSV (удобно для
+  серии бенчмарков и построения графиков ошибки);
+- `--mode auto|async|sync` — принудительно выбрать формат (по умолчанию `auto`);
+- `--read-ns`, `--write-ns`, `--switch-ns` — параметры sync-модели и штрафа.
+
+#### Как интерпретировать
+
+- Сравнивать модели по `row_misses` не нужно: у простой модели этого состояния
+  нет. Сравнивай `mem_busy` и его компоненты — это общая выходная метрика.
+- `avg_mem_ns` — средний `mem_busy` на одно обращение; удобно для отчётов.
+- Если `abs_error` по `mem_busy` меньше выбранного порога (например, 5%),
+  простую модель можно оставить. Если больше — либо калибровать
+  `read/write latency` простой модели, либо переходить на detailed.
+- `mem_busy` не включает простой и тактирование, поэтому его ошибка может не
+  совпадать с ошибкой полного `Spike finished: time=...`.
 
 ### Co-simulation (`spike_dram`)
 

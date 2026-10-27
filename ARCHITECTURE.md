@@ -18,6 +18,9 @@ RISC-V-ядро Spike встроено внутрь SystemC-хоста, а об�
 - `SimpleMemory` (`simple_memory.cpp`) — простая, для sync: только массив байт,
   а задержку задаёт сам контроллер фиксированным числом тактов.
 
+Сравнивать модели по трассам помогает `tools/trace_stats.py`: он читает CSV
+`DramChip`/`SimpleMemory` и считает `mem_busy` (см. §7).
+
 ## 2. Ядро контроллера
 
 ```
@@ -239,3 +242,25 @@ sync нет — сравнивать модели нужно по времени
   обращения — это разные уровни детализации, а не два варианта одной трассы.
 - **SystemC 3.0.2 и C++26.** SystemC и пользовательский код должны собираться
   одним `-std`, иначе получится undefined reference на `sc_api_version_...`.
+
+## 7. Анализ трасс (`tools/trace_stats.py`)
+
+Трассы обоих режимов (`--trace <file>` или `dram_trace_<mode>.csv`) разбирает
+`tools/trace_stats.py`. Общая метрика — занятость контроллера памятью:
+
+```
+mem_busy = access_time + turnaround_time
+```
+
+- **async**: `access_time` — сумма `latency_ns` по строкам банковских команд
+  (`ACT/PRE/RD/WR`), поэтому row hit/miss и precharge уже учтены; `turnaround` —
+  число смен `RD`↔`WR` среди доступов, умноженное на `--switch-ns` (20 нс).
+- **sync**: `latency_ns` в трассе нет, `access_time` восстанавливается как
+  `reads * --read-ns + writes * --write-ns` (по умолчанию 30 и 20 нс, то есть
+  3 и 2 такта по 10 нс); `turnaround` считается так же по сменам `RD`↔`WR`.
+
+Формат определяется по заголовку CSV: async узнаётся по `row_access` и
+`latency_ns`, sync — по `command/type/addr/len`. Две трассы сравниваются по
+`mem_busy`, `access_ns` и `avg_mem_ns`; async автоматически становится
+reference, ошибка sync считается как `|sync - async| / async`. Метрики можно
+выгрузить в CSV через `--csv-out`. Подробные примеры запуска — в `README.md`.
